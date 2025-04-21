@@ -1,0 +1,290 @@
+---
+title: "SS25 AFRE 891: Finals - Replication Project"
+author: "Ye-Rim Lee"
+date: "2025-04-20"
+output:
+  html_document:
+    df_print: paged
+bibliography: references.bib
+---
+
+This R Markdown file is a document for replicating @pagano2023 which studies the asset pricing implications of pandemic resilience. In this replication project, I focused on **section 4.2: "Returns and Firm Resilience during the Disaster"** of the paper.
+
+Run the code chunks in sequence—starting with package loading and data cleaning—through to the plotting and table‐generation steps.
+
+# Loading Packages and Data
+
+```{r message=FALSE, warning=FALSE}
+# Clean environment
+rm(list = ls()); gc(reset = TRUE)
+
+# Packages
+pacman::p_load(tidyverse, latex2exp, gtrendsR, sandwich, multiwayvcov, lmtest)
+
+# Data
+load("data/Replication_Data.RData")
+```
+
+-   `sec.data` is security-level time-series using daily data.
+-   `socdist.data` is industry-level data on social distancing measures proposed by @koren2020.
+
+
+Authors assigned a firm to the ‘High’ portfolio if its ‘affected share’ (as defined by @koren2020) is below the median value and to the ‘Low’ portfolio if it is above.
+
+To measure firms’ resilience to pandemics, the study relys on measures recently introduced in labor economics, intended to capture the extent to which firms’ operations are compatible with **social distancing**. These measures quantify the degree to which jobs can be done from home and do not rely on human interaction in physical proximity.
+
+
+# Data Preparation
+
+
+# Figure 1. Attention to COVID 19 and US equity returns
+
+## Panel A. Google trends index and aggregate US stock market
+
+```{r}
+# gtrends("Coronavirus",
+#         geo = "US",
+#         time = "2020-01-01 2020-03-31",
+#         tz   = 0)
+```
+
+Using `gtrendsR` package, you can query Google Trends index. I failed on fetching in R, instead following screenshot is the Google trends index.
+
+![Screenshot of Google Trends for 'Coronavirus' during the first quarter of 2020.](figures/GoogleTrends.png)
+
+
+# Figure 2. Risk-adjusted returns of stocks with high and Low to social distancing
+
+```{r Construct Data}
+# Build data frame
+data1 <- sec.data %>%
+  # require non‐missing returns & industry code
+  filter(!is.na(capmadj.ret),
+         !is.na(ff5adj.ret),
+         !is.na(hxzadj.ret),
+         !is.na(naics3dig)) %>%
+  # bring in 'affected' exposure
+  left_join(
+    socdist.data %>% select(naics3dig, exposure = affected),
+    by = "naics3dig"
+  ) %>%
+  filter(!is.na(exposure)) %>%
+  # split into High/Low portfolios by median exposure
+  group_by(date) %>%
+  mutate(group = if_else(exposure > median(exposure),
+                         "Low",
+                         "High")) %>%
+  ungroup() %>%
+  # compute daily value‐weighted returns
+  group_by(date, group) %>%
+  summarize(
+    CAPM   = weighted.mean(capmadj.ret, market.cap),
+    FF5    = weighted.mean(ff5adj.ret, market.cap),
+    HXZ    = weighted.mean(hxzadj.ret, market.cap),
+    .groups = "drop"
+  ) %>%
+  # pivot long
+  pivot_longer(
+    cols      = c(CAPM, FF5, HXZ),
+    names_to  = "model",
+    values_to = "vw_ret"
+  ) %>%
+  arrange(model, group, date) %>%
+  group_by(model, group) %>%
+  mutate(
+    cumret    = cumprod(1 + vw_ret) - 1, # compute cumulative return series
+    plot_date = ymd(as.character(date))
+  ) %>%
+  ungroup()
+```
+
+## Panel A. CAPM-adjusted returns
+```{r}
+# High vs. Low resilience
+data1 %>%
+  filter(model == "CAPM",
+         plot_date <= ymd("2020-03-31")) %>% # through Mar 31
+  
+  ggplot(aes(plot_date, cumret * 100, color = group)) +
+  geom_line(size = 1.2) +
+  geom_vline(xintercept = as.Date(c("2020-02-24", "2020-03-20")),
+             linetype   = "dashed", color = "grey50") +
+  geom_hline(yintercept = 0,
+             linetype   = "solid",
+             color      = "black") +
+  scale_color_manual(values = c("High" = "darkgreen",
+                                "Low"  = "darkred")) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b") +
+  labs(
+    x     = NULL,
+    y     = "cumulative return (%)",
+    title = "Panel A. CAPM-adjusted returns - High vs. Low resilience"
+  ) +
+  theme_minimal() +
+  theme(
+      panel.grid           = element_blank(), # remove all gridlines
+      panel.background     = element_blank(), # make the plotting area blank
+      panel.border         = element_rect(color = "black", fill = NA, size = 1),  # add a black border
+      
+      legend.position      = c(0.02, 0.02),
+      legend.justification = c("left","bottom"),
+      legend.title         = element_blank()
+    )
+```
+
+
+```{r}
+# High−minus−Low resilience
+data1 %>%
+  filter(model == "CAPM",                                        
+         plot_date <= as.Date("2020-03-31")) %>%   # through Mar 31
+  select(plot_date, group, cumret) %>%      
+  pivot_wider(names_from  = group,
+              values_from = cumret) %>%                           
+  mutate(difference = High - Low) %>% 
+  
+  ggplot(aes(plot_date, difference * 100)) +
+  geom_line(color = "blue", size = 1.2) +
+  geom_vline(xintercept = as.Date(c("2020-02-24","2020-03-20")),
+             linetype   = "dashed",
+             color      = "black") +
+  geom_hline(yintercept = 0,
+             linetype   = "solid",
+             color      = "black") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %d") +
+  labs(
+    x     = NULL,
+    y     = "cumulative return (%)",
+    title = "Panel A. CAPM-adjusted returns: High−minus−Low resilience"
+  ) +
+  theme(
+    panel.grid       = element_blank(),
+    panel.background = element_blank(),
+    panel.border     = element_rect(color = "black", fill = NA)
+  )
+```
+
+## Panel C. FF5-adjusted returns
+```{r}
+# High vs. Low resilience
+data1 %>%
+  filter(model == "FF5",
+         plot_date <= ymd("2020-03-31")) %>% # through Mar 31
+  
+  ggplot(aes(plot_date, cumret * 100, color = group)) +
+  geom_line(size = 1.2) +
+  geom_vline(xintercept = as.Date(c("2020-02-24", "2020-03-20")),
+             linetype   = "dashed", color = "grey50") +
+  geom_hline(yintercept = 0,
+             linetype   = "solid",
+             color      = "black") +
+  scale_color_manual(values = c("High" = "darkgreen",
+                                "Low"  = "darkred")) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b") +
+  labs(
+    x     = NULL,
+    y     = "cumulative return (%)",
+    title = "Panel C. FF5-adjusted returns - High vs. Low resilience"
+  ) +
+  theme_minimal() +
+  theme(
+      panel.grid           = element_blank(), # remove all gridlines
+      panel.background     = element_blank(), # make the plotting area blank
+      panel.border         = element_rect(color = "black", fill = NA, size = 1),  # add a black border
+      
+      legend.position      = c(0.02, 0.02),
+      legend.justification = c("left","bottom"),
+      legend.title         = element_blank()
+    )
+```
+
+
+```{r}
+# High−minus−Low resilience
+data1 %>%
+  filter(model == "FF5",                                        
+         plot_date <= as.Date("2020-03-31")) %>%   # through Mar 31
+  select(plot_date, group, cumret) %>%      
+  pivot_wider(names_from  = group,
+              values_from = cumret) %>%                           
+  mutate(difference = High - Low) %>% 
+  
+  ggplot(aes(plot_date, difference * 100)) +
+  geom_line(color = "blue", size = 1.2) +
+  geom_vline(xintercept = as.Date(c("2020-02-24","2020-03-20")),
+             linetype   = "dashed",
+             color      = "grey50") +
+  geom_hline(yintercept = 0,
+             linetype   = "solid",
+             color      = "black") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %d") +
+  labs(
+    x     = NULL,
+    y     = "cumulative return (%)",
+    title = "Panel A. FF5-adjusted returns: High−minus−Low resilience"
+  ) +
+  theme(
+    panel.grid       = element_blank(),
+    panel.background = element_blank(),
+    panel.border     = element_rect(color = "black", fill = NA)
+  )
+```
+
+# Table 2. Excess and risk-adjusted returns of high and Low stocks
+## Panel A. Resilience based on ‘affected share’ as in Koren and Pet ̋o (2020)
+```{r}
+# Function to compute "mean [t‑stat] ***"
+format_table <- function(x){
+  v  <- na.omit(x) * 100
+  m  <- mean(v)
+  m0 <- lm(v ~ 1)
+  bw <- bwAndrews(m0, prewhite = FALSE) # optimal truncation lag as suggested by Andrews (1991)
+  se <- sqrt(NeweyWest(m0, lag = bw, prewhite = FALSE)[1,1]) # t-statistics based on standard errors following Newey and West (1987)
+  t  <- m / se
+  p  <- 2 * pt(-abs(t), df = length(v) - 1)
+  stars <- ifelse(p < 0.01, "***",
+            ifelse(p < 0.05, "**",
+            ifelse(p < 0.10, "*", "")))
+  sprintf("%5.2f [%5.2f]%s", m, t, stars) # format stats
+}
+
+# Define crisis window
+# from day after Italy introduced its lock down (2020-02-24) 
+# to the last trading day before the Fed announced its intervention (2020-03-20)
+window <- as.Date(c("2020-02-24","2020-03-20"))
+
+# Summary for High & Low
+table_HL <- data1 %>% 
+  filter(between(plot_date, window[1], window[2]),
+         model != "HXZ") %>% 
+  group_by(group, model) %>% 
+  summarize(cell = format_table(vw_ret), 
+            .groups="drop") %>% 
+  pivot_wider(names_from = model, values_from = cell)
+
+# Summary for High-minus-Low
+table_diff <- data1 %>% 
+  filter(between(plot_date, window[1], window[2]),
+         model != "HXZ") %>% 
+  group_by(model) %>% 
+  summarize(cell = format_table(
+              vw_ret[group=="High"] - vw_ret[group=="Low"]
+            ), 
+            .groups="drop") %>% 
+  pivot_wider(names_from = model, values_from = cell) %>% 
+  mutate(group = "High−Low resilience")
+
+# Bind to table
+table2 <- bind_rows(table_HL, table_diff) %>%
+  rename(Portfolio = group)
+
+knitr::kable(
+  table2,
+  align     = c("l","r","r"),
+  col.names = c("Portfolio","CAPM","FF5"),
+  caption   = "Panel A. Resilience based on ‘affected share’ as in Koren and Pet̋o (2020)"
+)
+
+```
+
+# References
