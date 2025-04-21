@@ -18,4 +18,4 @@ This repository contains all the materials needed to fully reproduce the figures
 If you run into any errors or have questions about the replication steps, please feel free to contact me:
 
 **Ye‑Rim Lee**  
-✉︎ leey@msu.edu  
+✉︎ leeye12@msu.edu  
